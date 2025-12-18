@@ -1,105 +1,70 @@
-
 import React, { useState, useEffect, useMemo } from 'react';
 import TradeCalculator from './components/TradeCalculator';
 import Calendar from './components/Calendar';
-import { TradeRecord, CryptoPrice, DailyNote } from './types';
+import { TradeRecord, DailyNote } from './types';
+import { generateDailyAIReport } from './services/geminiService';
 import { 
-  Wallet, 
   Search,
   RefreshCw, 
   NotebookPen, 
-  FileText, 
-  Copy, 
   Trash2, 
   ArrowUpRight, 
   ArrowDownRight, 
   Clock,
-  CheckCircle,
   Activity,
-  Hash,
   Calendar as CalendarIcon,
-  X
+  X,
+  Sparkles,
+  List,
+  ChevronRight,
+  Hash,
+  MessageSquare
 } from 'lucide-react';
 
 const App: React.FC = () => {
-  // --- State & Initialization ---
-  const [trades, setTrades] = useState<TradeRecord[]>(() => {
-    const saved = localStorage.getItem('crypto_trades');
-    return saved ? JSON.parse(saved) : [];
-  });
-  
-  const [dailyNotes, setDailyNotes] = useState<Record<string, DailyNote>>(() => {
-    const saved = localStorage.getItem('crypto_notes');
-    return saved ? JSON.parse(saved) : {};
-  });
+  // --- 数据持久化 ---
+  const [trades, setTrades] = useState<TradeRecord[]>(() => JSON.parse(localStorage.getItem('crypto_trades') || '[]'));
+  const [dailyNotes, setDailyNotes] = useState<Record<string, DailyNote>>(() => JSON.parse(localStorage.getItem('crypto_notes') || '{}'));
+  const [aiReports, setAiReports] = useState<Record<string, string>>(() => JSON.parse(localStorage.getItem('crypto_ai_reports') || '{}'));
 
+  // --- UI 状态 ---
   const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [isSearching, setIsSearching] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  const [copySuccess, setCopySuccess] = useState(false);
+  const [activeTab, setActiveTab] = useState<'daily' | 'timeline'>('daily');
+  const [isGeneratingAI, setIsGeneratingAI] = useState(false);
 
-  // --- Persistence ---
-  useEffect(() => {
-    localStorage.setItem('crypto_trades', JSON.stringify(trades));
-  }, [trades]);
+  useEffect(() => localStorage.setItem('crypto_trades', JSON.stringify(trades)), [trades]);
+  useEffect(() => localStorage.setItem('crypto_notes', JSON.stringify(dailyNotes)), [dailyNotes]);
+  useEffect(() => localStorage.setItem('crypto_ai_reports', JSON.stringify(aiReports)), [aiReports]);
 
-  useEffect(() => {
-    localStorage.setItem('crypto_notes', JSON.stringify(dailyNotes));
-  }, [dailyNotes]);
-
-  // --- Handlers ---
+  // --- 核心操作 ---
   const addTrade = (trade: TradeRecord) => {
-    // 强制将新交易关联到当前选中的日期，或者交易创建日期
     const tradeWithDate = { ...trade, dateStr: selectedDate };
     setTrades([tradeWithDate, ...trades]);
   };
 
-  const removeTrade = (id: string) => {
-    if(confirm('确定删除此记录？')) setTrades(trades.filter(t => t.id !== id));
-  };
-
-  const updateTradeNote = (id: string, note: string) => {
-    setTrades(trades.map(t => t.id === id ? { ...t, note } : t));
-  };
-
   const updateDailySummary = (text: string) => {
-    // 自动解析标签 #tag
-    const tags = Array.from(text.matchAll(/#(\w+)/g)).map(match => match[1]);
+    // 增强正则：支持中文和英文标签
+    const tags = Array.from(text.matchAll(/#([\u4e00-\u9fa5\w]+)/g)).map(match => match[1]);
     setDailyNotes(prev => ({
       ...prev,
       [selectedDate]: { dateStr: selectedDate, summary: text, tags }
     }));
   };
 
-  const refreshPrices = async () => {
-    const holding = trades.filter(t => t.status === 'HOLDING' && t.coinId);
-    if (holding.length === 0) return;
-    setRefreshing(true);
-    const ids = Array.from(new Set(holding.map(t => t.coinId))).join(',');
-    try {
-      const resp = await fetch(`https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${ids}`);
-      if (resp.ok) {
-        const data: CryptoPrice[] = await resp.json();
-        const priceMap = new Map(data.map(c => [c.id, c.current_price]));
-        setTrades(prev => prev.map(t => {
-          if (t.status === 'HOLDING' && t.coinId && priceMap.has(t.coinId)) {
-            const cur = priceMap.get(t.coinId)!;
-            const size = t.type === 'SPOT' ? t.amount/t.entryPrice : (t.amount*t.leverage)/t.entryPrice;
-            const pnl = t.direction === 'LONG' ? (cur - t.entryPrice) * size : (t.entryPrice - cur) * size;
-            return { ...t, exitPrice: cur, pnl, roi: (pnl/t.amount)*100 };
-          }
-          return t;
-        }));
-      }
-    } catch (e) { console.error(e); }
-    finally { setRefreshing(false); }
+  const handleGenerateReport = async () => {
+    setIsGeneratingAI(true);
+    const dayTrades = trades.filter(t => t.dateStr === selectedDate);
+    const dayNote = dailyNotes[selectedDate] || { dateStr: selectedDate, summary: '', tags: [] };
+    const report = await generateDailyAIReport(selectedDate, dayTrades, dayNote);
+    setAiReports(prev => ({ ...prev, [selectedDate]: report }));
+    setIsGeneratingAI(false);
   };
 
-  // --- Filtering Logic ---
+  // --- 数据过滤 ---
   const filteredTrades = useMemo(() => {
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
+    const q = searchQuery.toLowerCase();
+    if (q) {
       return trades.filter(t => 
         t.symbol.toLowerCase().includes(q) || 
         t.note.toLowerCase().includes(q) ||
@@ -110,180 +75,165 @@ const App: React.FC = () => {
     return trades.filter(t => t.dateStr === selectedDate);
   }, [trades, selectedDate, searchQuery, dailyNotes]);
 
-  const closedTrades = filteredTrades.filter(t => t.status === 'CLOSED');
-  const holdingTrades = filteredTrades.filter(t => t.status === 'HOLDING');
-  
-  const totalRealized = trades.filter(t => t.status === 'CLOSED').reduce((a, b) => a + b.pnl, 0);
-  const totalUnrealized = trades.filter(t => t.status === 'HOLDING').reduce((a, b) => a + b.pnl, 0);
+  // 所有写过心得的日期
+  // Fix: Explicitly cast Object.values(dailyNotes) to DailyNote[] to resolve 'unknown' type errors on summary and dateStr.
+  const noteTimeline = useMemo(() => {
+    return (Object.values(dailyNotes) as DailyNote[])
+      .filter(n => n.summary.trim().length > 0)
+      .sort((a, b) => b.dateStr.localeCompare(a.dateStr));
+  }, [dailyNotes]);
 
   const currentNote = dailyNotes[selectedDate] || { summary: '', tags: [] };
-
-  // --- UI Components ---
-  // Fix: Explicitly type TradeCard as a React.FC to allow the standard 'key' prop in JSX mapping
-  const TradeCard: React.FC<{ trade: TradeRecord }> = ({ trade }) => (
-    <div className={`p-3 transition-all border-l-4 rounded-r-lg mb-2 group ${
-      trade.status === 'HOLDING' ? 'bg-blue-900/10 border-blue-500' : 'bg-crypto-card border-gray-700 hover:bg-gray-800'
-    }`}>
-      <div className="flex justify-between items-start mb-1">
-        <div className="flex items-center gap-2">
-            <span className="font-bold text-white text-sm">{trade.symbol}</span>
-            <span className={`text-[9px] px-1 rounded flex items-center gap-0.5 ${trade.direction === 'LONG' ? 'bg-emerald-900/50 text-emerald-400' : 'bg-rose-900/50 text-rose-400'}`}>
-              {trade.direction === 'LONG' ? <ArrowUpRight size={8} /> : <ArrowDownRight size={8} />}
-              {trade.type === 'FUTURES' ? `${trade.leverage}x` : '现货'}
-            </span>
-            {searchQuery && (
-              <span className="text-[9px] text-gray-500 flex items-center gap-1">
-                <CalendarIcon size={8} /> {trade.dateStr}
-              </span>
-            )}
-        </div>
-        <div className="text-right">
-          <div className={`text-xs font-mono font-bold ${trade.pnl >= 0 ? 'text-crypto-up' : 'text-crypto-down'}`}>
-            {trade.pnl >= 0 ? '+' : ''}{trade.pnl.toFixed(2)}
-          </div>
-        </div>
-      </div>
-      <div className="flex items-center justify-between bg-black/30 rounded px-2 py-1 mb-2 text-[10px] text-gray-400 font-mono">
-        <span>${trade.entryPrice} ➜ ${trade.exitPrice}</span>
-        <span className={trade.roi >= 0 ? 'text-emerald-500' : 'text-rose-500'}>{trade.roi.toFixed(1)}%</span>
-      </div>
-      <div className="relative">
-        <input
-            type="text"
-            value={trade.note}
-            onChange={(e) => updateTradeNote(trade.id, e.target.value)}
-            placeholder="备注心得..."
-            className="w-full bg-transparent border-b border-gray-800 focus:border-crypto-accent focus:outline-none py-0.5 text-[11px] text-gray-400"
-        />
-        <button onClick={() => removeTrade(trade.id)} className="absolute right-0 top-0 text-gray-700 hover:text-red-500 opacity-0 group-hover:opacity-100"><Trash2 size={12}/></button>
-      </div>
-    </div>
-  );
+  const currentAiReport = aiReports[selectedDate];
 
   return (
-    <div className="min-h-screen bg-crypto-dark text-gray-200 pb-20 selection:bg-crypto-accent/30">
-      {/* 顶部导航 */}
-      <header className="sticky top-0 z-50 bg-crypto-dark/80 backdrop-blur-xl border-b border-gray-800 shadow-2xl">
-        <div className="max-w-7xl mx-auto px-4 h-14 flex justify-between items-center gap-4">
-          <div className="flex items-center gap-3">
-            <div className="bg-crypto-accent p-1.5 rounded-lg text-crypto-dark shadow-lg shadow-crypto-accent/20">
-              <NotebookPen size={18} />
-            </div>
-            <h1 className="text-lg font-black tracking-tighter text-white hidden md:block">CRYPTO<span className="text-crypto-accent italic">LOG</span></h1>
+    <div className="min-h-screen bg-crypto-dark text-gray-200 selection:bg-crypto-accent/30">
+      {/* Header */}
+      <header className="sticky top-0 z-40 bg-crypto-dark/80 backdrop-blur-md border-b border-gray-800 px-6 h-16 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="p-2 bg-crypto-accent rounded-xl text-crypto-dark shadow-lg shadow-crypto-accent/20">
+            <NotebookPen size={20} />
           </div>
+          <h1 className="text-xl font-black tracking-tighter text-white">CRYPTO<span className="text-crypto-accent italic">LOG</span></h1>
+        </div>
 
-          <div className="flex-1 max-w-md relative group">
-             <Search size={14} className={`absolute left-3 top-1/2 -translate-y-1/2 transition-colors ${isSearching ? 'text-crypto-accent' : 'text-gray-500'}`} />
-             <input 
-                type="text"
-                placeholder="搜索币种、笔记或 #标签..."
-                className="w-full bg-gray-900/50 border border-gray-800 rounded-full pl-9 pr-4 py-1.5 text-sm focus:outline-none focus:border-crypto-accent focus:bg-gray-900 transition-all"
-                value={searchQuery}
-                onFocus={() => setIsSearching(true)}
-                onBlur={() => setTimeout(() => setIsSearching(false), 200)}
-                onChange={(e) => setSearchQuery(e.target.value)}
-             />
-             {searchQuery && (
-               <button onClick={() => setSearchQuery('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white"><X size={14}/></button>
-             )}
-          </div>
-          
-          <div className="flex gap-2">
-            <div className="hidden sm:flex flex-col items-end">
-              <span className="text-[10px] text-gray-500 font-bold uppercase">Total PnL</span>
-              <span className={`text-sm font-mono font-black ${(totalRealized + totalUnrealized) >= 0 ? 'text-crypto-up' : 'text-crypto-down'}`}>
-                ${(totalRealized + totalUnrealized).toFixed(2)}
-              </span>
-            </div>
-            <button onClick={refreshPrices} disabled={refreshing} className={`p-2 rounded-full bg-gray-800 hover:bg-gray-700 transition-all ${refreshing ? 'animate-spin text-crypto-accent' : ''}`}>
-               <RefreshCw size={14} />
-            </button>
-          </div>
+        <div className="flex-1 max-w-lg mx-8 relative">
+          <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500" />
+          <input 
+            type="text" 
+            placeholder="搜币种、心得或 #中文标签..."
+            className="w-full bg-gray-900 border border-gray-800 rounded-full py-2 pl-12 pr-4 text-sm focus:outline-none focus:border-crypto-accent transition-all"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+          {searchQuery && <button onClick={() => setSearchQuery('')} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white"><X size={16}/></button>}
+        </div>
+
+        <div className="flex items-center gap-4">
+           <div className="text-right hidden sm:block">
+              <p className="text-[10px] text-gray-500 font-bold uppercase">Total Profit</p>
+              <p className="text-sm font-mono font-black text-crypto-up">${trades.reduce((a,b)=>a+b.pnl,0).toFixed(2)}</p>
+           </div>
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 py-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
-        
-        {/* 左侧：日历 & 计算器 */}
+      <main className="max-w-7xl mx-auto px-6 py-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
+        {/* Left Column */}
         <div className="lg:col-span-4 space-y-6">
           <div className="bg-crypto-card rounded-2xl border border-gray-800 p-4 shadow-xl">
-             <Calendar 
-                trades={trades} 
-                dailyNotes={dailyNotes} 
-                selectedDate={selectedDate} 
-                onSelectDate={setSelectedDate} 
-             />
+            <Calendar 
+              trades={trades} 
+              dailyNotes={dailyNotes} 
+              selectedDate={selectedDate} 
+              onSelectDate={(d) => { setSelectedDate(d); setActiveTab('daily'); }} 
+            />
           </div>
           <TradeCalculator onAddTrade={addTrade} />
         </div>
 
-        {/* 右侧：当期笔记 & 交易流 */}
-        <div className="lg:col-span-8 flex flex-col space-y-6">
-          
-          {/* 每日总结区域 */}
-          {!searchQuery && (
-            <section className="bg-crypto-card p-6 rounded-2xl border border-gray-800 shadow-xl relative overflow-hidden">
-               <div className="flex justify-between items-center mb-4">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-indigo-500/10 rounded-xl flex items-center justify-center text-indigo-400">
-                      <CalendarIcon size={20} />
-                    </div>
-                    <div>
-                      <h2 className="text-base font-bold text-white">{selectedDate} 复盘心得</h2>
-                      <div className="flex gap-1 mt-0.5">
-                        {currentNote.tags.map(tag => (
-                          <span key={tag} className="text-[9px] px-1.5 py-0.5 bg-crypto-accent/10 text-crypto-accent rounded border border-crypto-accent/20 font-bold">#{tag}</span>
-                        ))}
-                      </div>
-                    </div>
+        {/* Right Column */}
+        <div className="lg:col-span-8">
+          <div className="flex gap-2 mb-6 p-1 bg-gray-900 w-fit rounded-xl border border-gray-800">
+            <button onClick={() => setActiveTab('daily')} className={`px-6 py-2 rounded-lg text-xs font-bold flex items-center gap-2 transition-all ${activeTab === 'daily' ? 'bg-gray-800 text-white shadow-lg' : 'text-gray-500'}`}><Activity size={14}/>当日复盘</button>
+            <button onClick={() => setActiveTab('timeline')} className={`px-6 py-2 rounded-lg text-xs font-bold flex items-center gap-2 transition-all ${activeTab === 'timeline' ? 'bg-gray-800 text-white shadow-lg' : 'text-gray-500'}`}><List size={14}/>日记时间轴</button>
+          </div>
+
+          {activeTab === 'daily' ? (
+            <div className="space-y-6">
+              {/* 心得编辑区 */}
+              <section className="bg-crypto-card p-6 rounded-2xl border border-gray-800 shadow-xl">
+                <div className="flex justify-between items-center mb-4">
+                  <h2 className="text-lg font-bold text-white flex items-center gap-2"><CalendarIcon size={18} className="text-indigo-400"/> {selectedDate} 复盘心得</h2>
+                  <div className="flex gap-1">
+                    {currentNote.tags.map(t => <span key={t} className="px-2 py-0.5 bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 rounded text-[10px] font-bold">#{t}</span>)}
                   </div>
-                  <div className="text-xs text-gray-500 font-mono">
-                    {filteredTrades.length} Trades
-                  </div>
-               </div>
-               <textarea
-                  className="w-full h-32 bg-gray-900/50 border border-gray-800 rounded-xl p-4 text-sm text-gray-200 focus:outline-none focus:border-crypto-accent focus:ring-1 focus:ring-crypto-accent/20 resize-none transition-all"
-                  placeholder="记录今日的市场情绪、关键点位、心情... (使用 #标签 自动分类)"
+                </div>
+                <textarea 
+                  className="w-full h-40 bg-gray-900/50 border border-gray-800 rounded-xl p-4 text-sm focus:outline-none focus:border-crypto-accent resize-none mb-4"
+                  placeholder="记录今日的市场情绪、关键操作决策... (支持 #中文标签)"
                   value={currentNote.summary}
                   onChange={(e) => updateDailySummary(e.target.value)}
                 />
-            </section>
-          )}
+                <button 
+                  onClick={handleGenerateReport} 
+                  disabled={isGeneratingAI}
+                  className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-indigo-600 to-purple-600 rounded-lg text-xs font-bold text-white hover:opacity-90 disabled:opacity-50 transition-all"
+                >
+                  {isGeneratingAI ? <RefreshCw size={14} className="animate-spin"/> : <Sparkles size={14}/>}
+                  {currentAiReport ? '重新生成 AI 诊断' : '生成 AI 深度分析报告'}
+                </button>
+              </section>
 
-          {/* 交易流 */}
-          <div className="flex flex-col flex-1">
-             <div className="flex items-center justify-between mb-3 px-1">
-                <h3 className="text-sm font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2">
-                  <Activity size={14} className="text-crypto-accent"/> 
-                  {searchQuery ? `搜索结果: "${searchQuery}"` : '交易记录'}
-                </h3>
-             </div>
+              {/* AI 报告展示 */}
+              {currentAiReport && (
+                <section className="bg-indigo-950/20 border border-indigo-500/30 rounded-2xl p-6 relative overflow-hidden">
+                  <div className="absolute top-0 right-0 p-4 opacity-10"><Sparkles size={60}/></div>
+                  <h3 className="text-sm font-black text-indigo-400 uppercase tracking-widest mb-4 flex items-center gap-2">AI 交易诊断报告</h3>
+                  <div className="prose prose-invert prose-sm max-w-none text-gray-300 leading-relaxed whitespace-pre-wrap">
+                    {currentAiReport}
+                  </div>
+                </section>
+              )}
 
-             {filteredTrades.length === 0 ? (
-               <div className="bg-crypto-card/30 rounded-2xl border border-dashed border-gray-800 h-64 flex flex-col items-center justify-center text-gray-600">
-                  <Clock size={32} className="mb-2 opacity-20" />
-                  <p className="text-sm">这一天暂无交易记录</p>
-               </div>
-             ) : (
-               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                 {(holdingTrades.length > 0) && (
-                   <div className="md:col-span-2">
-                      <div className="text-[10px] text-blue-400 font-bold mb-2 flex items-center gap-1 uppercase tracking-tighter"><div className="w-1 h-1 bg-blue-500 rounded-full animate-pulse"></div> Holding / Pending</div>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        {holdingTrades.map(t => <TradeCard key={t.id} trade={t} />)}
-                      </div>
-                   </div>
-                 )}
-                 <div className="md:col-span-2">
-                    <div className="text-[10px] text-gray-500 font-bold mb-2 uppercase tracking-tighter flex items-center gap-1"><div className="w-1 h-1 bg-gray-700 rounded-full"></div> History</div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                      {closedTrades.map(t => <TradeCard key={t.id} trade={t} />)}
+              {/* 当日交易列表 */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {filteredTrades.map(trade => (
+                  <div key={trade.id} className="bg-crypto-card p-4 rounded-xl border border-gray-800 hover:border-gray-700 transition-all group">
+                    <div className="flex justify-between items-start mb-2">
+                       <div className="flex items-center gap-2">
+                          <span className="font-bold text-white text-sm">{trade.symbol}</span>
+                          <span className={`text-[9px] px-1.5 py-0.5 rounded font-black ${trade.direction === 'LONG' ? 'bg-emerald-900/50 text-emerald-400' : 'bg-rose-900/50 text-rose-400'}`}>
+                            {trade.direction} {trade.leverage}x
+                          </span>
+                       </div>
+                       <span className={`text-sm font-mono font-bold ${trade.pnl >= 0 ? 'text-crypto-up' : 'text-crypto-down'}`}>
+                         {trade.pnl >= 0 ? '+' : ''}{trade.pnl.toFixed(2)}
+                       </span>
                     </div>
-                 </div>
-               </div>
-             )}
-          </div>
-
+                    <p className="text-[10px] text-gray-500 font-mono mb-2">${trade.entryPrice} ➜ ${trade.exitPrice} ({trade.roi.toFixed(1)}%)</p>
+                    <div className="flex items-center justify-between">
+                       <span className="text-[11px] text-gray-400 italic">“{trade.note || '无备注'}”</span>
+                       <button onClick={() => setTrades(trades.filter(t => t.id !== trade.id))} className="text-gray-700 hover:text-red-500 transition-colors"><Trash2 size={12}/></button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            /* 日记流视图 */
+            <div className="space-y-4">
+              {noteTimeline.length === 0 ? (
+                <div className="h-64 flex flex-col items-center justify-center text-gray-600 border-2 border-dashed border-gray-800 rounded-3xl">
+                   <MessageSquare size={40} className="mb-2 opacity-20"/>
+                   <p>还没有写过日记心得</p>
+                </div>
+              ) : (
+                noteTimeline.map(note => (
+                  <div key={note.dateStr} onClick={() => { setSelectedDate(note.dateStr); setActiveTab('daily'); }} 
+                    className="bg-crypto-card p-5 rounded-2xl border border-gray-800 hover:border-crypto-accent/50 transition-all cursor-pointer group">
+                    <div className="flex justify-between items-center mb-3">
+                      <div className="flex items-center gap-3">
+                        <span className="text-sm font-black text-white">{note.dateStr}</span>
+                        <div className="flex gap-1">
+                          {note.tags.map(t => <span key={t} className="text-[9px] bg-gray-900 text-gray-500 px-1.5 py-0.5 rounded">#{t}</span>)}
+                        </div>
+                      </div>
+                      <ChevronRight size={16} className="text-gray-700 group-hover:text-crypto-accent transition-colors"/>
+                    </div>
+                    <p className="text-sm text-gray-400 line-clamp-2 leading-relaxed">
+                      {note.summary}
+                    </p>
+                    <div className="mt-3 pt-3 border-t border-gray-800/50 flex gap-4 text-[10px] text-gray-600 font-bold uppercase">
+                       <span>Trades: {trades.filter(t => t.dateStr === note.dateStr).length}</span>
+                       <span>Daily PnL: <span className={trades.filter(t=>t.dateStr===note.dateStr).reduce((a,b)=>a+b.pnl,0) >= 0 ? 'text-crypto-up' : 'text-crypto-down'}>
+                         ${trades.filter(t=>t.dateStr===note.dateStr).reduce((a,b)=>a+b.pnl,0).toFixed(2)}
+                       </span></span>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
         </div>
       </main>
     </div>
