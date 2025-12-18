@@ -7,12 +7,12 @@ interface TradeCalculatorProps {
   onAddTrade: (trade: TradeRecord) => void;
 }
 
-// 基础备选币种，防止 API 挂掉导致无法选择
 const FALLBACK_COINS: CryptoPrice[] = [
   { id: 'bitcoin', symbol: 'btc', name: 'Bitcoin', current_price: 0, price_change_percentage_24h: 0 },
   { id: 'ethereum', symbol: 'eth', name: 'Ethereum', current_price: 0, price_change_percentage_24h: 0 },
   { id: 'solana', symbol: 'sol', name: 'Solana', current_price: 0, price_change_percentage_24h: 0 },
   { id: 'binancecoin', symbol: 'bnb', name: 'BNB', current_price: 0, price_change_percentage_24h: 0 },
+  { id: 'ripple', symbol: 'xrp', name: 'XRP', current_price: 0, price_change_percentage_24h: 0 },
 ];
 
 const TradeCalculator: React.FC<TradeCalculatorProps> = ({ onAddTrade }) => {
@@ -37,21 +37,22 @@ const TradeCalculator: React.FC<TradeCalculatorProps> = ({ onAddTrade }) => {
   const [apiError, setApiError] = useState(false);
 
   useEffect(() => {
-    fetch('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250')
-      .then(res => {
-        if (!res.ok) throw new Error();
-        return res.json();
-      })
-      .then(data => {
+    const fetchCoinList = async () => {
+      try {
+        const res = await fetch('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250', {
+            headers: { 'Accept': 'application/json' }
+        });
+        if (res.status === 429) throw new Error('Rate limit');
+        const data = await res.json();
         if (Array.isArray(data)) {
           setAvailableCoins(data);
           setApiError(false);
         }
-      })
-      .catch(() => {
+      } catch (err) {
         setApiError(true);
-        console.warn("Using fallback coin list due to fetch error");
-      });
+      }
+    };
+    fetchCoinList();
   }, []);
 
   useEffect(() => {
@@ -76,7 +77,7 @@ const TradeCalculator: React.FC<TradeCalculatorProps> = ({ onAddTrade }) => {
       const size = state.type === 'SPOT' ? amt : amt * lev;
       const coinAmount = size / entry;
       let pnl = state.direction === 'LONG' ? (exit - entry) * coinAmount : (entry - exit) * coinAmount;
-      setResult({ pnl, roi: (pnl / amt) * 100 });
+      setResult({ pnl, roi: (amt > 0) ? (pnl / amt) * 100 : 0 });
     } else {
       setResult({ pnl: 0, roi: 0 });
     }
@@ -119,14 +120,7 @@ const TradeCalculator: React.FC<TradeCalculatorProps> = ({ onAddTrade }) => {
           <Calculator size={18} className="text-crypto-accent" />
           <span>盈亏计算器</span>
         </div>
-        {apiError && (
-          <div className="group relative">
-            <AlertCircle size={14} className="text-amber-500 cursor-help" />
-            <div className="absolute right-0 bottom-full mb-2 w-48 p-2 bg-gray-900 border border-gray-700 rounded text-[10px] text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-              行情服务由于频率限制暂时无法连接，已启用备选币种清单。
-            </div>
-          </div>
-        )}
+        {apiError && <AlertCircle size={14} className="text-amber-500 animate-pulse" title="行情连接受限" />}
       </div>
 
       <div className="space-y-4">
@@ -172,9 +166,6 @@ const TradeCalculator: React.FC<TradeCalculatorProps> = ({ onAddTrade }) => {
                       {coin.current_price > 0 && <span className="text-[10px] text-crypto-accent font-mono">${coin.current_price.toLocaleString()}</span>}
                     </div>
                   ))}
-                  {filteredCoins.length === 0 && (
-                     <div className="p-3 text-[10px] text-gray-600 text-center">输入代号手动登记</div>
-                  )}
                 </div>
               )}
             </div>
