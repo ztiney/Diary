@@ -1,5 +1,5 @@
 {
-  "name": "MochiPlanner",
-  "description": "A cute, aesthetic weekly planner with multi-user support and AI scheduling assistance.",
+  "name": "币圈笔记",
+  "description": "每日加密货币交易日记，内置盈亏计算器、实时价格和 AI 驱动的 Markdown 报告生成。",
   "requestFramePermissions": []
 }

@@ -1,220 +1,99 @@
 
 import React from 'react';
-import { ScheduleItem, DAYS, HOURS_START, HOURS_END, PIXELS_PER_HOUR, TaskTemplate } from '../types';
-import { GridItem } from './GridItem';
-import { SleepMarker } from './SleepMarker';
-import { format, startOfWeek } from 'date-fns';
-import { Clock } from 'lucide-react';
+import { TradeRecord, DailyNote } from '../types';
+import { ChevronLeft, ChevronRight, MessageSquare } from 'lucide-react';
 
 interface CalendarProps {
-  currentDate: Date;
-  items: ScheduleItem[];
-  onItemUpdate: (id: string, updates: Partial<ScheduleItem>) => void;
-  onItemAdd: (item: ScheduleItem) => void;
-  onItemDelete: (id: string) => void;
-  userId: string;
-  isExport?: boolean;
+  trades: TradeRecord[];
+  dailyNotes: Record<string, DailyNote>;
+  selectedDate: string;
+  onSelectDate: (date: string) => void;
 }
 
-export const Calendar: React.FC<CalendarProps> = ({ 
-  currentDate, 
-  items, 
-  onItemUpdate, 
-  onItemAdd,
-  onItemDelete,
-  userId,
-  isExport
-}) => {
-  // Dynamic Height & Start Calculation for Export
-  let displayEndHour = HOURS_END;
-  let displayStartHour = HOURS_START;
-  
-  if (isExport) {
-      // Find the latest activity to trim the calendar height
-      let maxMinute = HOURS_START * 60;
-      let minMinute = HOURS_END * 60;
-      let hasItems = false;
+const Calendar: React.FC<CalendarProps> = ({ trades, dailyNotes, selectedDate, onSelectDate }) => {
+  const today = new Date();
+  const [viewDate, setViewDate] = React.useState(new Date(today.getFullYear(), today.getMonth(), 1));
 
-      items.forEach(item => {
-          // If exporting, we might ignore the sleep marker for height/start calculation if we hide it
-          if (item.type === 'marker' && item.markerType === 'sleep') return;
-          
-          hasItems = true;
-          const end = item.type === 'block' ? item.startTime + item.duration : item.startTime;
-          if (end > maxMinute) maxMinute = end;
-          if (item.startTime < minMinute) minMinute = item.startTime;
-      });
-      
-      if (hasItems) {
-          const maxHour = Math.ceil(maxMinute / 60);
-          // Ensure minimum height (e.g. at least 12 hours showing) or up to max activity + 1 hour padding
-          displayEndHour = Math.max(HOURS_START + 12, maxHour + 1);
+  const getDaysInMonth = (date: Date) => new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+  const getFirstDayOfMonth = (date: Date) => new Date(date.getFullYear(), date.getMonth(), 1).getDay();
 
-          const minHour = Math.floor(minMinute / 60);
-          // Start 1 hour before earliest item to be compact
-          displayStartHour = Math.max(HOURS_START, minHour - 1);
-      }
-  }
+  const daysInMonth = getDaysInMonth(viewDate);
+  const firstDay = getFirstDayOfMonth(viewDate);
 
-  const hours = Array.from({ length: displayEndHour - displayStartHour }, (_, i) => i + displayStartHour);
-  const weekId = format(startOfWeek(currentDate, { weekStartsOn: 1 }), 'yyyy-MM-dd'); 
+  // 计算每日 PnL
+  const dailyPnL: Record<string, number> = {};
+  trades.forEach(trade => {
+    if (!dailyPnL[trade.dateStr]) dailyPnL[trade.dateStr] = 0;
+    dailyPnL[trade.dateStr] += trade.pnl;
+  });
 
-  const handleDrop = (e: React.DragEvent, dayIndex: number) => {
-    e.preventDefault();
-    const data = e.dataTransfer.getData('application/json');
-    if (!data) return;
+  const changeMonth = (offset: number) => {
+    setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth() + offset, 1));
+  };
 
-    try {
-      const template: TaskTemplate = JSON.parse(data);
-      
-      const rect = e.currentTarget.getBoundingClientRect();
-      const relativeY = e.clientY - rect.top;
-      
-      const pixelsPerMinute = PIXELS_PER_HOUR / 60;
-      const rawMinutes = relativeY / pixelsPerMinute;
-      let startMinutes = (displayStartHour * 60) + rawMinutes;
-      
-      // 1. Grid Snap (15 mins)
-      let snappedStart = Math.round(startMinutes / 15) * 15;
-
-      // 2. Magnetic Snap (Only check block items)
-      const dayBlockItems = items.filter(i => i.dayIndex === dayIndex && i.type !== 'marker');
-      const thresholdMinutes = 15; 
-      const proposedEnd = snappedStart + template.defaultDuration;
-
-      for (const sibling of dayBlockItems) {
-         const siblingEnd = sibling.startTime + sibling.duration;
-         if (Math.abs(snappedStart - siblingEnd) < thresholdMinutes) {
-             snappedStart = siblingEnd;
-         }
-         if (Math.abs(proposedEnd - sibling.startTime) < thresholdMinutes) {
-             snappedStart = sibling.startTime - template.defaultDuration;
-         }
-      }
-      
-      snappedStart = Math.max(HOURS_START * 60, snappedStart);
-
-      const newItem: ScheduleItem = {
-        id: crypto.randomUUID(),
-        userId,
-        templateId: template.id,
-        title: template.name,
-        startTime: snappedStart,
-        duration: template.defaultDuration,
-        dayIndex: dayIndex,
-        color: template.color,
-        completion: 0,
-        weekId: weekId,
-        isRecurring: false,
-        type: 'block' // Default to block
-      };
-
-      onItemAdd(newItem);
-    } catch (err) {
-      console.error("Failed to parse drop data", err);
+  const renderDays = () => {
+    const days = [];
+    for (let i = 0; i < firstDay; i++) {
+      days.push(<div key={`empty-${i}`} className="h-14 bg-gray-900/30 border border-gray-800/50"></div>);
     }
-  };
 
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-  };
+    for (let d = 1; d <= daysInMonth; d++) {
+      const dateCheck = new Date(viewDate.getFullYear(), viewDate.getMonth(), d);
+      const ds = dateCheck.toISOString().split('T')[0];
+      const pnl = dailyPnL[ds];
+      const hasNote = dailyNotes[ds]?.summary.trim().length > 0;
+      const isSelected = selectedDate === ds;
+      const isToday = today.toISOString().split('T')[0] === ds;
 
-  const containerClasses = isExport 
-    ? "overflow-visible relative bg-white/60 rounded-3xl border border-white/50 w-full" 
-    : "flex-1 overflow-y-auto no-scrollbar relative bg-white/60 rounded-3xl backdrop-blur-sm shadow-xl border border-white/50";
+      days.push(
+        <div 
+          key={d} 
+          onClick={() => onSelectDate(ds)}
+          className={`h-14 border border-gray-800 p-1 flex flex-col justify-between cursor-pointer transition-all hover:bg-gray-800 relative
+            ${isSelected ? 'bg-crypto-accent/20 ring-1 ring-inset ring-crypto-accent' : 'bg-gray-900'}
+            ${isToday && !isSelected ? 'border-blue-500/50' : ''}
+          `}
+        >
+          <div className="flex justify-between items-start">
+            <span className={`text-[10px] font-mono ${isToday ? 'text-blue-400 font-bold' : 'text-gray-500'}`}>{d}</span>
+            {hasNote && <MessageSquare size={8} className="text-crypto-accent fill-crypto-accent/20" />}
+          </div>
+          {pnl !== undefined && (
+            <div className={`text-[9px] font-bold text-center truncate ${pnl >= 0 ? 'text-crypto-up' : 'text-crypto-down'}`}>
+              {pnl > 0 ? '+' : ''}{Math.round(pnl)}
+            </div>
+          )}
+        </div>
+      );
+    }
+    return days;
+  };
 
   return (
-    <div className={containerClasses}>
-      <div className={`flex ${isExport ? 'w-full' : 'min-w-[800px]'}`}>
-        
-        {/* Time Sidebar */}
-        <div className={`w-16 flex-shrink-0 border-r border-rose-100 bg-white/40 ${isExport ? '' : 'sticky left-0 z-[60]'}`}>
-          {/* Header spacer - Now styled to match Day Headers */}
-          <div className={`h-10 border-b border-rose-100 bg-rose-50/90 flex items-center justify-center ${isExport ? '' : 'sticky top-0 z-[70] backdrop-blur-md'}`}>
-             <Clock size={16} className="text-rose-300 opacity-80" />
-          </div> 
-          
-          {hours.map((hour) => {
-            const displayHour = hour >= 24 ? hour - 24 : hour;
-            return (
-                <div key={hour} className="relative border-b border-transparent" style={{ height: `${PIXELS_PER_HOUR}px` }}>
-                <span className="absolute -top-3 right-2 text-xs text-rose-400 font-bold font-mono">
-                    {displayHour}:00
-                </span>
-                </div>
-            )
-          })}
-        </div>
-
-        {/* Days Columns */}
-        <div className="flex flex-1">
-          {DAYS.map((day, dayIndex) => {
-            const dayItems = items.filter(item => item.dayIndex === dayIndex);
-            const blockItems = dayItems.filter(i => i.type !== 'marker');
-            const markerItems = dayItems.filter(i => i.type === 'marker');
-            
-            // In Export mode, hide 'sleep' marker
-            const visibleMarkers = isExport 
-                ? markerItems.filter(i => i.markerType !== 'sleep') 
-                : markerItems;
-            
-            // Find markers for sleep calculation
-            const prevDayIndex = dayIndex === 0 ? 6 : dayIndex - 1;
-            const prevDaySleepItem = items.find(i => i.dayIndex === prevDayIndex && i.markerType === 'sleep');
-
-            return (
-                <div key={day} className="flex-1 min-w-[80px] border-r border-rose-100 last:border-r-0 flex flex-col">
-                {/* Day Header - CHANGED Z-INDEX to 70 to overlap stickers (which are z-60 on hover) */}
-                <div className={`h-10 flex items-center justify-center border-b border-rose-100 bg-rose-50/90 ${isExport ? '' : 'sticky top-0 z-[70] backdrop-blur-md'}`}>
-                    <span className="text-sm font-bold text-rose-800 uppercase tracking-wide">{day}</span>
-                </div>
-
-                {/* Day Grid */}
-                <div 
-                    className="relative bg-white/30 hover:bg-white/50 transition-colors"
-                    style={{ height: `${(displayEndHour - displayStartHour) * PIXELS_PER_HOUR}px` }}
-                    onDrop={isExport ? undefined : (e) => handleDrop(e, dayIndex)}
-                    onDragOver={isExport ? undefined : handleDragOver}
-                >
-                    {/* Grid Lines */}
-                    {hours.map((hour) => (
-                        <div 
-                        key={hour} 
-                        className="border-b border-rose-100/40 w-full absolute pointer-events-none"
-                        style={{ top: `${(hour - displayStartHour) * PIXELS_PER_HOUR}px`, height: '1px' }}
-                        />
-                    ))}
-
-                    {/* Normal Block Items */}
-                    {blockItems.map(item => (
-                        <GridItem 
-                            key={item.id} 
-                            item={item} 
-                            onUpdate={onItemUpdate}
-                            onDelete={onItemDelete}
-                            onCopy={onItemAdd}
-                            siblings={blockItems}
-                            baseHour={displayStartHour}
-                        />
-                    ))}
-
-                    {/* Line Markers (Wake/Sleep) */}
-                    {visibleMarkers.map(item => (
-                        <SleepMarker 
-                            key={item.id}
-                            item={item}
-                            prevDayItem={prevDaySleepItem}
-                            onUpdate={onItemUpdate}
-                            baseHour={displayStartHour}
-                        />
-                    ))}
-
-                </div>
-                </div>
-            );
-          })}
-        </div>
+    <div>
+      <div className="flex justify-between items-center mb-4 text-white px-1">
+        <button onClick={() => changeMonth(-1)} className="p-1 hover:bg-gray-700 rounded text-gray-400">
+          <ChevronLeft size={16} />
+        </button>
+        <span className="font-bold text-xs uppercase tracking-widest">
+          {viewDate.getFullYear()} . {viewDate.getMonth() + 1}
+        </span>
+        <button onClick={() => changeMonth(1)} className="p-1 hover:bg-gray-700 rounded text-gray-400">
+          <ChevronRight size={16} />
+        </button>
+      </div>
+      
+      <div className="grid grid-cols-7 gap-px text-center mb-1">
+        {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map(day => (
+          <div key={day} className="text-[10px] text-gray-600 font-bold py-1">{day}</div>
+        ))}
+      </div>
+      
+      <div className="grid grid-cols-7 gap-px rounded-lg overflow-hidden border border-gray-800 bg-gray-800 shadow-inner">
+        {renderDays()}
       </div>
     </div>
   );
 };
+
+export default Calendar;
