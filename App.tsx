@@ -2,7 +2,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import TradeCalculator from './components/TradeCalculator';
 import Calendar from './components/Calendar';
-import CryptoTicker from './components/CryptoTicker';
 import { TradeRecord, DailyNote } from './types';
 import { 
   Search,
@@ -168,8 +167,6 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-crypto-dark text-gray-200 selection:bg-crypto-accent/30 flex flex-col font-sans">
-      <CryptoTicker />
-
       <header className="sticky top-0 z-40 bg-crypto-dark/80 backdrop-blur-md border-b border-gray-800 px-6 h-16 flex items-center justify-between shadow-sm">
         <div className="flex items-center gap-3">
           <div className="p-2 bg-crypto-accent rounded-xl text-crypto-dark shadow-lg shadow-crypto-accent/20">

@@ -21,15 +21,6 @@
                 down: '#f43f5e',
                 hold: '#3b82f6',
               }
-            },
-            animation: {
-              'marquee': 'marquee 40s linear infinite',
-            },
-            keyframes: {
-              marquee: {
-                '0%': { transform: 'translateX(0)' },
-                '100%': { transform: 'translateX(-50%)' },
-              }
             }
           }
         }
@@ -62,10 +53,6 @@
       .scrollbar-hide {
           -ms-overflow-style: none;
           scrollbar-width: none;
-      }
-      /* 停止动画在悬停时 */
-      .pause-on-hover:hover .animate-marquee {
-        animation-play-state: paused;
       }
     </style>
   <script type="importmap">
