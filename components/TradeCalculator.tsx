@@ -5,17 +5,19 @@ import { Search, Calculator, Save, TrendingUp, TrendingDown, AlertCircle, Shoppi
 
 interface TradeCalculatorProps {
   onAddTrade: (trade: TradeRecord) => void;
+  availableCoins: CryptoPrice[];
+  apiError: boolean;
 }
 
 const FALLBACK_COINS: CryptoPrice[] = [
-  { id: 'bitcoin', symbol: 'btc', name: 'Bitcoin', current_price: 0, price_change_percentage_24h: 0 },
-  { id: 'ethereum', symbol: 'eth', name: 'Ethereum', current_price: 0, price_change_percentage_24h: 0 },
-  { id: 'solana', symbol: 'sol', name: 'Solana', current_price: 0, price_change_percentage_24h: 0 },
-  { id: 'binancecoin', symbol: 'bnb', name: 'BNB', current_price: 0, price_change_percentage_24h: 0 },
-  { id: 'ripple', symbol: 'xrp', name: 'XRP', current_price: 0, price_change_percentage_24h: 0 },
+  { id: 'bitcoin', symbol: 'btc', name: 'Bitcoin', current_price: 96000, price_change_percentage_24h: 0 },
+  { id: 'ethereum', symbol: 'eth', name: 'Ethereum', current_price: 3300, price_change_percentage_24h: 0 },
+  { id: 'solana', symbol: 'sol', name: 'Solana', current_price: 180, price_change_percentage_24h: 0 },
+  { id: 'binancecoin', symbol: 'bnb', name: 'BNB', current_price: 600, price_change_percentage_24h: 0 },
+  { id: 'ripple', symbol: 'xrp', name: 'XRP', current_price: 2.2, price_change_percentage_24h: 0 },
 ];
 
-const TradeCalculator: React.FC<TradeCalculatorProps> = ({ onAddTrade }) => {
+const TradeCalculator: React.FC<TradeCalculatorProps> = ({ onAddTrade, availableCoins, apiError }) => {
   const [state, setState] = useState<CalculatorState>({
     symbol: '',
     coinId: '',
@@ -30,33 +32,12 @@ const TradeCalculator: React.FC<TradeCalculatorProps> = ({ onAddTrade }) => {
   });
 
   const [result, setResult] = useState({ pnl: 0, roi: 0 });
-  const [availableCoins, setAvailableCoins] = useState<CryptoPrice[]>(FALLBACK_COINS);
   const [filteredCoins, setFilteredCoins] = useState<CryptoPrice[]>([]);
   const [showDropdown, setShowDropdown] = useState(false);
   const [currentMarketPrice, setCurrentMarketPrice] = useState<number | null>(null);
-  const [apiError, setApiError] = useState(false);
 
   const isSpot = state.type === 'SPOT';
   const isHolding = state.status === 'HOLDING';
-
-  useEffect(() => {
-    const fetchCoinList = async () => {
-      try {
-        const res = await fetch('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250', {
-            headers: { 'Accept': 'application/json' }
-        });
-        if (res.status === 429) throw new Error('Rate limit');
-        const data = await res.json();
-        if (Array.isArray(data)) {
-          setAvailableCoins(data);
-          setApiError(false);
-        }
-      } catch (err) {
-        setApiError(true);
-      }
-    };
-    fetchCoinList();
-  }, []);
 
   useEffect(() => {
     if (state.symbol) {

@@ -54,6 +54,17 @@
           -ms-overflow-style: none;
           scrollbar-width: none;
       }
+      /* Ticker Marquee Animation */
+      @keyframes marquee {
+        0% { transform: translateX(0%); }
+        100% { transform: translateX(-50%); }
+      }
+      .animate-marquee {
+        animation: marquee 25s linear infinite;
+      }
+      .pause-on-hover:hover .animate-marquee {
+        animation-play-state: paused;
+      }
     </style>
   <script type="importmap">
 {
@@ -67,6 +78,7 @@
   }
 }
 </script>
+<link rel="stylesheet" href="/index.css">
 </head>
   <body>
     <div id="root"></div>

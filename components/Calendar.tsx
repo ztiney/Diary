@@ -84,8 +84,8 @@ const Calendar: React.FC<CalendarProps> = ({ trades, dailyNotes, selectedDate, o
       </div>
       
       <div className="grid grid-cols-7 gap-px text-center mb-1">
-        {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map(day => (
-          <div key={day} className="text-[10px] text-gray-600 font-bold py-1">{day}</div>
+        {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, idx) => (
+          <div key={`${day}-${idx}`} className="text-[10px] text-gray-600 font-bold py-1">{day}</div>
         ))}
       </div>
       
