@@ -5,6 +5,26 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>CryptoJournal - 交易复盘日记</title>
+    <script>
+      // Defensive initialization for environments/tools probing WeChat or Mini Program properties on window.wx
+      (function() {
+        try {
+          if (typeof window !== 'undefined') {
+            if (!window.wx) {
+              window.wx = {
+                miniProgram: {
+                  getEnv: function(cb) { if (cb) cb({ miniprogram: false }); }
+                }
+              };
+            } else if (!window.wx.miniProgram) {
+              window.wx.miniProgram = {
+                getEnv: function(cb) { if (cb) cb({ miniprogram: false }); }
+              };
+            }
+          }
+        } catch (e) {}
+      })();
+    </script>
     <!-- Favicon SVG -->
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📒</text></svg>">
     <script src="https://cdn.tailwindcss.com"></script>
