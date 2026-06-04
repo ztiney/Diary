@@ -28,7 +28,8 @@ const TradeCalculator: React.FC<TradeCalculatorProps> = ({ onAddTrade, available
     direction: 'LONG',
     type: 'SPOT',
     status: 'HOLDING',
-    note: ''
+    note: '',
+    quantity: ''
   });
 
   const [result, setResult] = useState({ pnl: 0, roi: 0 });
@@ -51,21 +52,47 @@ const TradeCalculator: React.FC<TradeCalculatorProps> = ({ onAddTrade, available
     }
   }, [state.symbol, availableCoins]);
 
+  // Derived live calculated USDT value ("折合出有多少U") for spot
+  const calculatedSpotUSDT = React.useMemo(() => {
+    if (!isSpot) return 0;
+    const entry = parseFloat(state.entryPrice) || 0;
+    const qty = parseFloat(state.quantity || '') || 0;
+    return entry * qty;
+  }, [isSpot, state.entryPrice, state.quantity]);
+
   useEffect(() => {
     const entry = parseFloat(state.entryPrice);
-    const exit = parseFloat(state.exitPrice);
-    const amt = parseFloat(state.amount);
     const lev = isSpot ? 1 : parseFloat(state.leverage);
     
-    if (!isNaN(entry) && !isNaN(exit) && !isNaN(amt)) {
-      const size = isSpot ? amt : amt * lev;
-      const coinAmount = size / entry;
-      let pnl = state.direction === 'LONG' ? (exit - entry) * coinAmount : (entry - exit) * coinAmount;
-      setResult({ pnl, roi: (amt > 0) ? (pnl / amt) * 100 : 0 });
+    if (isSpot) {
+      const qty = parseFloat(state.quantity || '');
+      if (!isNaN(entry) && !isNaN(qty) && qty > 0) {
+        const uAmt = entry * qty; // Amount in U
+        // If it's closed, we use actual exitPrice. If holding, we default exitPrice to entry or current market price
+        const exit = state.status === 'CLOSED' ? parseFloat(state.exitPrice) : (currentMarketPrice || entry);
+        if (!isNaN(exit)) {
+          let pnl = state.direction === 'LONG' ? (exit - entry) * qty : (entry - exit) * qty;
+          setResult({ pnl, roi: (uAmt > 0) ? (pnl / uAmt) * 100 : 0 });
+        } else {
+          setResult({ pnl: 0, roi: 0 });
+        }
+      } else {
+        setResult({ pnl: 0, roi: 0 });
+      }
     } else {
-      setResult({ pnl: 0, roi: 0 });
+      // FUTURES
+      const exit = parseFloat(state.exitPrice);
+      const amt = parseFloat(state.amount);
+      if (!isNaN(entry) && !isNaN(exit) && !isNaN(amt)) {
+        const size = amt * lev;
+        const coinAmount = size / entry;
+        let pnl = state.direction === 'LONG' ? (exit - entry) * coinAmount : (entry - exit) * coinAmount;
+        setResult({ pnl, roi: (amt > 0) ? (pnl / amt) * 100 : 0 });
+      } else {
+        setResult({ pnl: 0, roi: 0 });
+      }
     }
-  }, [state, isSpot]);
+  }, [state, isSpot, currentMarketPrice]);
 
   const fillPrice = (target: 'entry' | 'exit') => {
     if (currentMarketPrice) {
@@ -75,6 +102,37 @@ const TradeCalculator: React.FC<TradeCalculatorProps> = ({ onAddTrade, available
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    const entry = parseFloat(state.entryPrice) || 0;
+    const qty = isSpot ? (parseFloat(state.quantity || '') || 0) : 0;
+    
+    // Calculate final submitted values
+    let finalAmt = parseFloat(state.amount) || 0;
+    let finalExitPrice = parseFloat(state.exitPrice) || 0;
+    
+    if (isSpot) {
+      finalAmt = entry * qty; // "折合出有多少U"
+      if (isHolding) {
+        // If holding, default exit price to the entryPrice or current market price so that initial Pnl is 0 or based on market
+        finalExitPrice = currentMarketPrice || entry;
+      }
+    }
+
+    // Now calculate submitted Pnl & Roi
+    let finalPnl = 0;
+    let finalRoi = 0;
+
+    if (isSpot) {
+      const exitPriceVal = isHolding ? (currentMarketPrice || entry) : finalExitPrice;
+      finalPnl = state.direction === 'LONG' ? (exitPriceVal - entry) * qty : (entry - exitPriceVal) * qty;
+      finalRoi = (finalAmt > 0) ? (finalPnl / finalAmt) * 100 : 0;
+    } else {
+      const lev = parseFloat(state.leverage) || 1;
+      const size = finalAmt * lev;
+      const coinAmount = size / entry;
+      finalPnl = state.direction === 'LONG' ? (finalExitPrice - entry) * coinAmount : (entry - finalExitPrice) * coinAmount;
+      finalRoi = (finalAmt > 0) ? (finalPnl / finalAmt) * 100 : 0;
+    }
+
     onAddTrade({
       id: crypto.randomUUID(),
       coinId: state.coinId,
@@ -82,17 +140,19 @@ const TradeCalculator: React.FC<TradeCalculatorProps> = ({ onAddTrade, available
       type: state.type,
       direction: state.direction,
       status: state.status,
-      entryPrice: parseFloat(state.entryPrice) || 0,
-      exitPrice: parseFloat(state.exitPrice) || 0,
-      amount: parseFloat(state.amount) || 0,
+      entryPrice: entry,
+      exitPrice: finalExitPrice,
+      amount: finalAmt,
       leverage: isSpot ? 1 : parseFloat(state.leverage),
-      pnl: result.pnl,
-      roi: result.roi,
+      pnl: finalPnl,
+      roi: finalRoi,
       note: state.note,
       timestamp: Date.now(),
-      dateStr: '' 
+      dateStr: '',
+      quantity: isSpot ? qty : (finalAmt * (parseFloat(state.leverage) || 1) / entry)
     });
-    setState(s => ({ ...s, entryPrice: '', exitPrice: '', note: '', symbol: '', coinId: '' }));
+
+    setState(s => ({ ...s, entryPrice: '', exitPrice: '', amount: '', quantity: '', note: '', symbol: '', coinId: '' }));
     setCurrentMarketPrice(null);
     setShowDropdown(false);
   };
@@ -102,7 +162,7 @@ const TradeCalculator: React.FC<TradeCalculatorProps> = ({ onAddTrade, available
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 text-white font-bold text-base">
           <Calculator size={18} className="text-crypto-accent" />
-          <span>{isSpot ? '现货盈亏计算' : '合约盈亏计算'}</span>
+          <span>{isSpot ? '现货极简记账' : '合约盈亏计算'}</span>
         </div>
         {apiError && <AlertCircle size={14} className="text-amber-500 animate-pulse" title="行情连接受限" />}
       </div>
@@ -120,11 +180,11 @@ const TradeCalculator: React.FC<TradeCalculatorProps> = ({ onAddTrade, available
         <div className="grid grid-cols-2 gap-2 bg-gray-900 p-1 rounded-xl">
           <button type="button" onClick={() => setState(s => ({ ...s, status: 'CLOSED' }))}
             className={`py-2 rounded-lg text-xs font-bold transition-all ${!isHolding ? 'bg-gray-800 text-white shadow' : 'text-gray-500'}`}>
-            {isSpot ? '已卖出/平仓' : '已平仓'}
+            {isSpot ? '已售终止 (平仓)' : '合约已平仓'}
           </button>
           <button type="button" onClick={() => setState(s => ({ ...s, status: 'HOLDING' }))}
             className={`py-2 rounded-lg text-xs font-bold transition-all ${isHolding ? 'bg-blue-600 text-white shadow' : 'text-gray-500'}`}>
-            {isSpot ? '当前持仓中' : '持仓中'}
+            {isSpot ? '当前持有中 (持仓)' : '合约持有中'}
           </button>
         </div>
 
@@ -168,74 +228,123 @@ const TradeCalculator: React.FC<TradeCalculatorProps> = ({ onAddTrade, available
                 </button>
                 <button type="button" onClick={() => setState(s => ({ ...s, direction: 'SHORT' }))}
                   className={`py-1.5 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1 transition-all ${state.direction === 'SHORT' ? 'bg-rose-500 text-white' : 'text-gray-500'}`}>
-                   {isSpot ? '卖出' : '做空'} {isSpot ? '' : <TrendingDown size={12}/>}
+                   {isSpot ? '卖出/看空' : '做空'}
                 </button>
               </div>
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          {/* 价格输入排 */}
+          <div className={(isSpot && isHolding) ? "grid grid-cols-1" : "grid grid-cols-2 gap-3"}>
             <div className="space-y-1">
               <div className="flex justify-between items-center px-1">
                 <label className="text-[10px] text-gray-500 font-bold uppercase">
-                  {isSpot ? '买入价格' : '开仓价格'}
+                  {isSpot ? '成交均价' : '开仓价格'}
                 </label>
-                {currentMarketPrice && <button type="button" onClick={() => fillPrice('entry')} className="text-[9px] text-crypto-accent hover:underline">现价</button>}
+                {currentMarketPrice && (
+                  <button type="button" onClick={() => fillPrice('entry')} className="text-[9px] text-crypto-accent hover:underline">
+                    使用现价 (${currentMarketPrice.toLocaleString()})
+                  </button>
+                )}
               </div>
-              <input type="number" step="any" value={state.entryPrice} onChange={e => setState(s => ({ ...s, entryPrice: e.target.value }))} className="w-full bg-gray-900 border border-gray-800 rounded-xl px-3 py-2 text-xs text-white font-mono" placeholder="0.00" required />
+              <input type="number" step="any" value={state.entryPrice} onChange={e => setState(s => ({ ...s, entryPrice: e.target.value }))} className="w-full bg-gray-900 border border-gray-800 rounded-xl px-3 py-2 text-xs text-white font-mono focus:border-crypto-accent focus:outline-none" placeholder="0.00" required />
             </div>
-            <div className="space-y-1">
-              <div className="flex justify-between items-center px-1">
-                <label className="text-[10px] text-gray-500 font-bold uppercase">
-                  {isHolding ? (isSpot ? '当前价格' : '当前/目标价') : (isSpot ? '卖出价格' : '平仓价格')}
-                </label>
-                {currentMarketPrice && <button type="button" onClick={() => fillPrice('exit')} className="text-[9px] text-crypto-accent hover:underline">现价</button>}
-              </div>
-              <input type="number" step="any" value={state.exitPrice} onChange={e => setState(s => ({ ...s, exitPrice: e.target.value }))} className="w-full bg-gray-900 border border-gray-800 rounded-xl px-3 py-2 text-xs text-white font-mono" placeholder="0.00" required />
-            </div>
-          </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <label className="text-[10px] text-gray-500 font-bold uppercase px-1">
-                {isSpot ? '投入金额 (USDT)' : '保证金 (USDT)'}
-              </label>
-              <input type="number" step="any" value={state.amount} onChange={e => setState(s => ({ ...s, amount: e.target.value }))} className="w-full bg-gray-900 border border-gray-800 rounded-xl px-3 py-2 text-xs text-white font-mono" placeholder="100.0" required />
-            </div>
-            {!isSpot && (
+            {/* 如果是现货持仓中，不需要在这个登记表里再次要求用户输入“当前价格” */}
+            {!(isSpot && isHolding) && (
               <div className="space-y-1">
-                <label className="text-[10px] text-gray-500 font-bold uppercase px-1 flex justify-between">杠杆: <span className="text-crypto-accent font-mono">{state.leverage}X</span></label>
-                <input type="range" min="1" max="125" value={state.leverage} onChange={e => setState(s => ({ ...s, leverage: e.target.value }))} className="w-full h-1.5 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-purple-500 mt-2.5" />
+                <div className="flex justify-between items-center px-1">
+                  <label className="text-[10px] text-gray-500 font-bold uppercase">
+                    {isSpot ? '卖出平仓价' : '当前/目标平仓价'}
+                  </label>
+                  {currentMarketPrice && (
+                    <button type="button" onClick={() => fillPrice('exit')} className="text-[9px] text-crypto-accent hover:underline">
+                      使用现价
+                    </button>
+                  )}
+                </div>
+                <input type="number" step="any" value={state.exitPrice} onChange={e => setState(s => ({ ...s, exitPrice: e.target.value }))} className="w-full bg-gray-900 border border-gray-800 rounded-xl px-3 py-2 text-xs text-white font-mono focus:border-crypto-accent focus:outline-none" placeholder="0.00" required />
               </div>
             )}
-            {isSpot && (
-              <div className="space-y-1 opacity-50">
-                <label className="text-[10px] text-gray-500 font-bold uppercase px-1">杠杆 (现货固定)</label>
-                <div className="w-full bg-gray-800/30 border border-gray-800 rounded-xl px-3 py-2 text-xs text-gray-500 font-mono">1X (NONE)</div>
+          </div>
+
+          {/* 投入数量或本金输入排 */}
+          <div className="grid grid-cols-2 gap-3">
+            {isSpot ? (
+              /* SPOT 现货模式: 输入数量而不是手动去折合其本金U */
+              <div className="space-y-1">
+                <label className="text-[10px] text-gray-400 font-bold uppercase px-1">
+                  成交数量 (币数)
+                </label>
+                <input 
+                  type="number" 
+                  step="any" 
+                  value={state.quantity || ''} 
+                  onChange={e => setState(s => ({ ...s, quantity: e.target.value }))} 
+                  className="w-full bg-gray-900 border border-gray-800 rounded-xl px-3 py-2 text-xs text-white font-mono focus:border-crypto-accent focus:outline-none" 
+                  placeholder="如 12.5" 
+                  required 
+                />
+              </div>
+            ) : (
+              /* FUTURES 合约模式: 输入保证金 USDT */
+              <div className="space-y-1">
+                <label className="text-[10px] text-gray-500 font-bold uppercase px-1">
+                  合约保证金 (USDT)
+                </label>
+                <input type="number" step="any" value={state.amount} onChange={e => setState(s => ({ ...s, amount: e.target.value }))} className="w-full bg-gray-900 border border-gray-800 rounded-xl px-3 py-2 text-xs text-white font-mono focus:border-crypto-accent focus:outline-none" placeholder="100.0" required />
+              </div>
+            )}
+
+            {/* 如果是现货：展示自动算好的折合 U 金额；如果是合约：展示杠杆滑块 */}
+            {isSpot ? (
+              <div className="space-y-1">
+                <label className="text-[10px] text-gray-500 font-bold uppercase px-1">
+                  折合本金 U 金额
+                </label>
+                <div className="w-full bg-gray-950/60 border border-gray-800 rounded-xl px-3 py-2 text-xs text-indigo-400 font-mono font-bold flex items-center h-[34px]">
+                  ≈ {calculatedSpotUSDT.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-1">
+                <label className="text-[10px] text-gray-500 font-bold uppercase px-1 flex justify-between">
+                  合约杠杆: <span className="text-crypto-accent font-mono">{state.leverage}X</span>
+                </label>
+                <input type="range" min="1" max="125" value={state.leverage} onChange={e => setState(s => ({ ...s, leverage: e.target.value }))} className="w-full h-1.5 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-purple-500 mt-2.5" />
               </div>
             )}
           </div>
 
           <div className="space-y-1">
             <label className="text-[10px] text-gray-500 font-bold uppercase px-1">交易心得 Note</label>
-            <textarea value={state.note} onChange={e => setState(s => ({ ...s, note: e.target.value }))} className="w-full bg-gray-900 border border-gray-800 rounded-xl px-4 py-2 text-xs text-gray-300 resize-none h-14 focus:outline-none focus:border-crypto-accent" placeholder={isSpot ? "记录买入理由或建仓计划..." : "例如：回踩 0.618 进场..."}></textarea>
+            <textarea value={state.note} onChange={e => setState(s => ({ ...s, note: e.target.value }))} className="w-full bg-gray-900 border border-gray-800 rounded-xl px-4 py-2 text-xs text-gray-300 resize-none h-14 focus:outline-none focus:border-crypto-accent" placeholder={isSpot ? "记录买入/卖出理由或建仓计划..." : "例如：回踩 0.618 进场..."}></textarea>
           </div>
 
-          <div className="bg-black/40 rounded-xl p-4 border border-gray-800/50 space-y-2">
-             <div className="flex justify-between items-center">
-                <span className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">{isHolding ? '浮动盈亏' : '实际收益'}</span>
-                <span className={`text-sm font-black font-mono ${result.pnl >= 0 ? 'text-crypto-up' : 'text-crypto-down'}`}>
-                  {result.pnl >= 0 ? '+' : ''}${result.pnl.toFixed(2)}
-                </span>
-             </div>
-             <div className="flex justify-between items-center">
-                <span className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">{isSpot ? '收益率' : '盈利率 ROI'}</span>
-                <span className={`text-xs font-bold font-mono ${result.roi >= 0 ? 'text-crypto-up' : 'text-crypto-down'}`}>{result.roi.toFixed(2)}%</span>
-             </div>
-          </div>
+          {/* 浮动盈亏计算展示区 (仅在已设置足够的价格和数量时展示) */}
+          {(!(isSpot && isHolding) || (isSpot && currentMarketPrice && state.entryPrice && state.quantity)) && (
+            <div className="bg-black/40 rounded-xl p-4 border border-gray-800/50 space-y-2">
+               <div className="flex justify-between items-center">
+                  <span className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">
+                    {isHolding ? (isSpot ? '当前参考浮动盈亏' : '浮动盈亏') : '实际收益'}
+                  </span>
+                  <span className={`text-sm font-black font-mono ${result.pnl >= 0 ? 'text-crypto-up' : 'text-crypto-down'}`}>
+                    {result.pnl >= 0 ? '+' : ''}${result.pnl.toFixed(2)}
+                  </span>
+               </div>
+               <div className="flex justify-between items-center">
+                  <span className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">
+                    预计收益率 (ROI)
+                  </span>
+                  <span className={`text-xs font-bold font-mono ${result.roi >= 0 ? 'text-crypto-up' : 'text-crypto-down'}`}>
+                    {result.roi >= 0 ? '+' : ''}{result.roi.toFixed(2)}%
+                  </span>
+               </div>
+            </div>
+          )}
 
           <button type="submit" className={`w-full font-black py-3.5 rounded-xl text-xs uppercase flex items-center justify-center gap-2 transition-all active:scale-[0.97] shadow-lg ${isHolding ? 'bg-blue-600 hover:bg-blue-500 shadow-blue-900/20 text-white' : 'bg-crypto-accent hover:bg-sky-400 text-crypto-dark shadow-sky-900/20'}`}>
-            <Save size={14} /> {isHolding ? (isSpot ? '记录当前现货持仓' : '记录当前合约持仓') : '记入今日复盘日记'}
+            <Save size={14} /> {isHolding ? (isSpot ? '记入我的持仓清单' : '记录当前合约持仓') : '记入今日复盘日记'}
           </button>
         </form>
       </div>

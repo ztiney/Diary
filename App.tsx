@@ -256,7 +256,7 @@ const App: React.FC = () => {
     const entry = trade.entryPrice;
     const lev = trade.type === 'SPOT' ? 1 : trade.leverage;
     const size = trade.type === 'SPOT' ? trade.amount : trade.amount * lev;
-    const coinAmount = size / entry;
+    const coinAmount = trade.quantity || (size / entry);
     const finalPnl = trade.direction === 'LONG' ? (finalPrice - entry) * coinAmount : (entry - finalPrice) * coinAmount;
     const finalRoi = (trade.amount > 0) ? (finalPnl / trade.amount) * 100 : 0;
 
@@ -336,7 +336,7 @@ const App: React.FC = () => {
       const entry = trade.entryPrice;
       const lev = trade.type === 'SPOT' ? 1 : trade.leverage;
       const size = trade.type === 'SPOT' ? trade.amount : trade.amount * lev;
-      const coinAmount = size / entry;
+      const coinAmount = trade.quantity || (size / entry);
       const pnl = trade.direction === 'LONG' ? (currentPrice - entry) * coinAmount : (entry - currentPrice) * coinAmount;
       
       totalFloatingPnL += pnl;
@@ -638,7 +638,7 @@ const App: React.FC = () => {
                       const entry = trade.entryPrice;
                       const lev = trade.type === 'SPOT' ? 1 : trade.leverage;
                       const size = trade.type === 'SPOT' ? trade.amount : trade.amount * lev;
-                      const coinAmount = size / entry;
+                      const coinAmount = trade.quantity || (size / entry);
                       const pnl = trade.direction === 'LONG' ? (currentPrice - entry) * coinAmount : (entry - currentPrice) * coinAmount;
                       const roi = (trade.amount > 0) ? (pnl / trade.amount) * 100 : 0;
 
@@ -676,12 +676,18 @@ const App: React.FC = () => {
                               <span className="font-mono text-white text-sm font-semibold">${trade.entryPrice}</span>
                             </div>
                             <div className="p-3 bg-gray-900/40 rounded-xl border border-gray-800/50">
-                              <span className="text-[10px] text-gray-500 block font-bold mb-1 uppercase">持仓本金 (Margin)</span>
-                              <span className="font-mono text-white text-sm font-semibold">${trade.amount} <span className="text-[10px] text-gray-600">USDT</span></span>
+                              <span className="text-[10px] text-gray-400 block font-bold mb-1 uppercase">持仓数量 (Quantity)</span>
+                              <span className="font-mono text-white text-sm font-semibold">
+                                {coinAmount % 1 === 0 ? coinAmount : coinAmount.toFixed(4)} <span className="text-[10px] text-gray-600 font-sans">{trade.symbol}</span>
+                              </span>
                             </div>
-                            <div className="p-3 bg-gray-900/40 rounded-xl border border-gray-800/50 col-span-2">
+                            <div className="p-3 bg-gray-900/40 rounded-xl border border-gray-800/50">
+                              <span className="text-[10px] text-gray-500 block font-bold mb-1 uppercase">持仓本金 (Capital)</span>
+                              <span className="font-mono text-white text-sm font-semibold">${trade.amount.toFixed(2)} <span className="text-[10px] text-gray-600">USDT</span></span>
+                            </div>
+                            <div className="p-3 bg-gray-900/40 rounded-xl border border-gray-800/50">
                               <span className="text-[10px] text-crypto-accent block font-bold mb-1 uppercase flex justify-between items-center">
-                                <span>行情模拟价 (AI 演算输入)</span>
+                                <span>行情模拟价</span>
                                 {customPrice !== undefined && (
                                   <button onClick={() => {
                                     setCustomPrices(prev => {
@@ -689,11 +695,11 @@ const App: React.FC = () => {
                                       delete copy[trade.id];
                                       return copy;
                                     });
-                                  }} className="text-[9px] hover:underline text-gray-500 font-bold">恢复实时价</button>
+                                  }} className="text-[9px] hover:underline text-gray-500 font-bold">重置</button>
                                 )}
                               </span>
-                              <div className="flex items-center gap-2">
-                                <span className="text-gray-500 font-mono text-sm leading-none">$</span>
+                              <div className="flex items-center gap-1">
+                                <span className="text-gray-500 font-mono text-xs leading-none">$</span>
                                 <input 
                                   type="number" 
                                   step="any"
@@ -702,7 +708,7 @@ const App: React.FC = () => {
                                     const val = parseFloat(e.target.value);
                                     setCustomPrices(prev => ({ ...prev, [trade.id]: isNaN(val) ? 0 : val }));
                                   }}
-                                  className="bg-transparent text-white font-mono text-sm border-b border-gray-800 focus:border-crypto-accent outline-none w-full py-0 pb-1"
+                                  className="bg-transparent text-white font-mono text-xs border-b border-gray-800 focus:border-crypto-accent outline-none w-full py-0 pb-1"
                                   placeholder="0.00"
                                 />
                               </div>

@@ -28,6 +28,7 @@ export interface TradeRecord {
   note: string;
   timestamp: number;
   dateStr: string; // 关联日期的 Key (YYYY-MM-DD)
+  quantity?: number; // 数量 (现货记录或合约张数)
 }
 
 export interface DailyNote {
@@ -47,4 +48,5 @@ export interface CalculatorState {
   type: TradeType;
   status: TradeStatus;
   note: string;
+  quantity?: string; // 用户输入的现货数量
 }
