@@ -119,9 +119,18 @@ const App: React.FC = () => {
         })
       });
 
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || `请求失败，服务器返回状态 ${res.status}`);
+      const contentType = res.headers.get('content-type');
+      let data: any;
+
+      if (contentType && contentType.includes('application/json')) {
+        data = await res.json();
+      } else {
+        const textResponse = await res.text();
+        throw new Error(`服务器返回了非 JSON 格式内容 (可能是临时故障或拦截页面)。状态码: ${res.status}。其内容前150字: ${textResponse.slice(0, 150)}`);
+      }
+
+      if (!res.ok || (data && (data.isError || data.error))) {
+        throw new Error(data?.error || `请求失败，服务器返回状态 ${res.status}`);
       }
 
       if (Array.isArray(data)) {

@@ -136,7 +136,7 @@ app.post("/api/binance/trades", async (req, res) => {
   const { apiKey, secretKey, type, symbol } = req.body;
 
   if (!apiKey || !secretKey) {
-    res.status(400).json({ error: "Binance API Key and Secret Key are required." });
+    res.status(200).json({ error: "Binance API Key and Secret Key are required.", isError: true });
     return;
   }
 
@@ -172,7 +172,7 @@ app.post("/api/binance/trades", async (req, res) => {
         errJson = JSON.parse(errText);
       } catch (e) {}
       const errMsg = errJson?.msg || errText || `HTTP response code ${response.status}`;
-      res.status(response.status).json({ error: `Binance: ${errMsg}` });
+      res.status(200).json({ error: `Binance: ${errMsg}`, isError: true });
       return;
     }
 
@@ -180,7 +180,7 @@ app.post("/api/binance/trades", async (req, res) => {
     res.json(data);
   } catch (error: any) {
     console.error("Binance Proxy Server Error:", error);
-    res.status(500).json({ error: `Failed to fetch from Binance: ${error.message}` });
+    res.status(200).json({ error: `Failed to fetch from Binance: ${error.message}`, isError: true });
   }
 });
 
