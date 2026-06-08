@@ -27,7 +27,9 @@ import {
   Percent,
   CheckCircle,
   AlertTriangle,
-  Coins
+  Coins,
+  Link,
+  Key
 } from 'lucide-react';
 
 interface AdvisorResponse {
@@ -78,6 +80,145 @@ const App: React.FC = () => {
 
   useEffect(() => localStorage.setItem('crypto_trades', JSON.stringify(trades)), [trades]);
   useEffect(() => localStorage.setItem('crypto_notes', JSON.stringify(dailyNotes)), [dailyNotes]);
+
+  // --- 币安 API 同步与交易笔记状态 ---
+  const [binanceApiKey, setBinanceApiKey] = useState<string>(() => localStorage.getItem('binance_api_key') || '');
+  const [binanceSecretKey, setBinanceSecretKey] = useState<string>(() => localStorage.getItem('binance_secret_key') || '');
+  const [binanceSymbol, setBinanceSymbol] = useState<string>('BTCUSDT');
+  const [binanceType, setBinanceType] = useState<'SPOT' | 'FUTURES'>('SPOT');
+  const [binanceTrades, setBinanceTrades] = useState<any[]>([]);
+  const [isBinanceSyncing, setIsBinanceSyncing] = useState(false);
+  const [binanceError, setBinanceError] = useState<string | null>(null);
+  const [binanceSuccessMsg, setBinanceSuccessMsg] = useState<string | null>(null);
+  const [binanceTradeNotes, setBinanceTradeNotes] = useState<Record<string, string>>({});
+  const [binanceTradeStatus, setBinanceTradeStatus] = useState<Record<string, 'HOLDING' | 'CLOSED'>>({});
+
+  useEffect(() => {
+    localStorage.setItem('binance_api_key', binanceApiKey);
+    localStorage.setItem('binance_secret_key', binanceSecretKey);
+  }, [binanceApiKey, binanceSecretKey]);
+
+  // --- 币安 API 同步与成交笔记生成方法 ---
+  const fetchBinanceTrades = async () => {
+    if (!binanceApiKey.trim() || !binanceSecretKey.trim()) {
+      setBinanceError('请先在本板块填写您的币安 API Key 与 Secret Key！');
+      return;
+    }
+    setIsBinanceSyncing(true);
+    setBinanceError(null);
+    setBinanceSuccessMsg(null);
+    try {
+      const res = await fetch('/api/binance/trades', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          apiKey: binanceApiKey.trim(),
+          secretKey: binanceSecretKey.trim(),
+          type: binanceType,
+          symbol: binanceSymbol.toUpperCase().trim()
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || `请求失败，服务器返回状态 ${res.status}`);
+      }
+
+      if (Array.isArray(data)) {
+        setBinanceTrades(data);
+        setBinanceSuccessMsg(`成功同步 ${data.length} 笔最新成交记录`);
+        const initStatus: Record<string, 'HOLDING' | 'CLOSED'> = {};
+        data.forEach((t: any) => {
+          const id = String(t.id);
+          if (binanceType === 'SPOT') {
+            initStatus[id] = 'CLOSED';
+          } else {
+            const pnlVal = parseFloat(t.realizedPnl || '0');
+            initStatus[id] = pnlVal !== 0 ? 'CLOSED' : 'HOLDING';
+          }
+        });
+        setBinanceTradeStatus(initStatus);
+      } else {
+        throw new Error('未查询到对应的成交记录，可能当前币种在此密钥账户下近期无成交，或格式错误');
+      }
+    } catch (err: any) {
+      console.error(err);
+      setBinanceError(err.message || '网络连接或 API 签名校验失败。如有 IP 绑定限制，请关闭该 IP 校验并放开免签。');
+    } finally {
+      setIsBinanceSyncing(false);
+    }
+  };
+
+  const importBinanceTrade = (bTrade: any) => {
+    const tradeId = String(bTrade.id);
+    const customNote = binanceTradeNotes[tradeId] || '';
+    const chosenStatus = binanceTradeStatus[tradeId] || 'CLOSED';
+
+    const timeMs = bTrade.time;
+    const tradeDateStr = new Date(timeMs).toISOString().split('T')[0];
+
+    const price = parseFloat(bTrade.price) || 0;
+    const qty = parseFloat(bTrade.qty) || 0;
+    
+    let direction: PositionDirection = 'LONG';
+    let pnl = 0;
+    let amount = 0;
+
+    if (binanceType === 'SPOT') {
+      amount = parseFloat(bTrade.quoteQty) || (price * qty);
+      direction = bTrade.isBuyer ? 'LONG' : 'SHORT';
+      pnl = 0;
+    } else {
+      amount = price * qty;
+      direction = bTrade.positionSide === 'SHORT' || bTrade.side === 'SELL' ? 'SHORT' : 'LONG';
+      pnl = parseFloat(bTrade.realizedPnl) || 0;
+    }
+
+    const roi = (amount > 0) ? (pnl / amount) * 100 : 0;
+
+    const newRecord: TradeRecord = {
+      id: `binance-${tradeId}`,
+      coinId: binanceSymbol.toLowerCase().replace('usdt', ''),
+      symbol: binanceSymbol.toUpperCase(),
+      type: binanceType,
+      direction,
+      status: chosenStatus,
+      entryPrice: price,
+      exitPrice: price,
+      amount,
+      leverage: binanceType === 'FUTURES' ? 10 : 1,
+      pnl,
+      roi,
+      note: customNote || `币安 API 同步导入 | ID: ${tradeId}`,
+      timestamp: timeMs,
+      dateStr: tradeDateStr,
+      quantity: qty
+    };
+
+    if (trades.some(t => t.id === newRecord.id)) {
+      alert('⚠️ 该笔成交记录已存在于您的流水日志中，请勿重复导入！');
+      return;
+    }
+
+    setTrades(prev => [newRecord, ...prev]);
+
+    // Update Daily note with this transaction note, allowing them to form comprehensive trading notes:
+    if (customNote.trim()) {
+      const existingNote = dailyNotes[tradeDateStr];
+      const noteHeader = `\n[币安交易回顾 ${new Date(timeMs).toLocaleTimeString()}] (${binanceSymbol}): ${customNote}`;
+      const newSummary = existingNote 
+        ? `${existingNote.summary}${noteHeader}`
+        : `「币安成交日记归档」${noteHeader}`;
+      
+      const tags = Array.from(new Set(Array.from(newSummary.matchAll(/#([\u4e00-\u9fa5\w\d_-]+)/g)).map(match => match[1])));
+      setDailyNotes(prev => ({
+        ...prev,
+        [tradeDateStr]: { dateStr: tradeDateStr, summary: newSummary, tags }
+      }));
+    }
+
+    alert('✅ 成功导入至本地流水！已在您的交易笔记中留下印记。');
+  };
 
   // --- 获取 CoinGecko 实时排行数据 ---
   const fetchCoinList = useCallback(async () => {
@@ -525,6 +666,7 @@ const App: React.FC = () => {
               <button onClick={() => setActiveTab('holdings')} className={`px-5 py-2 rounded-lg text-xs font-bold flex items-center gap-2 transition-all ${activeTab === 'holdings' ? 'bg-gray-800 text-white shadow-lg' : 'text-gray-500 hover:text-gray-300'}`}><Database size={14}/>我的持仓 <span className="bg-blue-900/50 text-blue-300 px-1.5 py-0.5 rounded-full text-[9px] font-black">{activeHoldings.length}</span></button>
               <button onClick={() => setActiveTab('timeline')} className={`px-5 py-2 rounded-lg text-xs font-bold flex items-center gap-2 transition-all ${activeTab === 'timeline' ? 'bg-gray-800 text-white shadow-lg' : 'text-gray-500 hover:text-gray-300'}`}><List size={14}/>全部记录</button>
               <button onClick={() => setActiveTab('analytics')} className={`px-5 py-2 rounded-lg text-xs font-bold flex items-center gap-2 transition-all ${activeTab === 'analytics' ? 'bg-gray-800 text-white shadow-lg' : 'text-gray-500 hover:text-gray-300'}`}><Percent size={14}/>量化诊断</button>
+              <button onClick={() => setActiveTab('binance')} className={`px-5 py-2 rounded-lg text-xs font-bold flex items-center gap-2 transition-all ${activeTab === 'binance' ? 'bg-gray-800 text-white shadow-lg' : 'text-gray-500 hover:text-gray-300'}`}><Link size={14}/>币安同步</button>
             </div>
           </div>
 
@@ -1151,6 +1293,259 @@ const App: React.FC = () => {
 
               </div>
 
+            </div>
+          )}
+
+          {activeTab === 'binance' && (
+            <div className="space-y-6 animate-fadeIn">
+              {/* API 绑定配置卡片 */}
+              <div className="bg-crypto-card p-6 rounded-3xl border border-gray-800 shadow-2xl relative">
+                <div className="flex items-center gap-3 mb-5 border-b border-gray-800/50 pb-3">
+                  <div className="w-1.5 h-6 bg-purple-500 rounded-full"></div>
+                  <h2 className="text-xl font-bold text-white tracking-tight flex items-center gap-1.5">
+                    <Key className="text-purple-400" size={20} /> 币安 API 密钥绑接与同步
+                  </h2>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* API Key 填报 */}
+                  <div className="space-y-4">
+                    <div>
+                      <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest block mb-1.5">Binance API Key</label>
+                      <input 
+                        type="password"
+                        placeholder="请输入您的币安 API Key"
+                        value={binanceApiKey}
+                        onChange={(e) => setBinanceApiKey(e.target.value)}
+                        className="w-full bg-gray-900/60 border border-gray-800 text-white rounded-xl px-4 py-2.5 text-xs focus:outline-none focus:border-purple-500 font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest block mb-1.5">Binance Secret Key</label>
+                      <input 
+                        type="password"
+                        placeholder="请输入您的币安 Secret Key"
+                        value={binanceSecretKey}
+                        onChange={(e) => setBinanceSecretKey(e.target.value)}
+                        className="w-full bg-gray-900/60 border border-gray-800 text-white rounded-xl px-4 py-2.5 text-xs focus:outline-none focus:border-purple-500 font-mono"
+                      />
+                    </div>
+                    <div className="p-3 bg-purple-950/10 border border-purple-900/20 rounded-xl text-[10px] text-purple-300 leading-relaxed font-sans flex items-start gap-2">
+                      <CheckCircle size={14} className="shrink-0 mt-0.5 text-purple-400" />
+                      <span>
+                        <strong>🔒 本地隐私隔离防护：</strong> 您的 API Keys 唯独只会存储在您本人的本地浏览器 (LocalStorage) 内，每次同步均直接通过本地全栈 API 路由转发并动态生成 SHA256 签名，<strong>服务器绝不会搜集或存储您的账户明密匙</strong>。
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* 同步筛选与触发 */}
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest block mb-1.5">交易产品类别</label>
+                        <div className="grid grid-cols-2 bg-gray-900 rounded-xl border border-gray-800 p-0.5">
+                          <button 
+                            type="button"
+                            onClick={() => setBinanceType('SPOT')}
+                            className={`py-1.5 px-2 text-[10px] font-black rounded-lg transition-all ${binanceType === 'SPOT' ? 'bg-gray-800 text-white' : 'text-gray-500 hover:text-gray-400'}`}
+                          >
+                            现货 SPOT
+                          </button>
+                          <button 
+                            type="button"
+                            onClick={() => setBinanceType('FUTURES')}
+                            className={`py-1.5 px-2 text-[10px] font-black rounded-lg transition-all ${binanceType === 'FUTURES' ? 'bg-gray-800 text-white' : 'text-gray-500 hover:text-gray-400'}`}
+                          >
+                            合约 FUTURES
+                          </button>
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest block mb-1.5">交易币对 (Symbol)</label>
+                        <input 
+                          type="text"
+                          placeholder="例如: BTCUSDT"
+                          value={binanceSymbol}
+                          onChange={(e) => setBinanceSymbol(e.target.value.toUpperCase().trim())}
+                          className="w-full bg-gray-900/60 border border-gray-800 text-white rounded-xl px-4 py-2 text-xs focus:outline-none focus:border-purple-500 font-mono text-center font-bold"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="p-3 bg-rose-950/10 border border-rose-900/20 rounded-xl text-[10px] text-rose-400 leading-relaxed font-sans flex items-start gap-2">
+                      <AlertTriangle size={14} className="shrink-0 mt-0.5 text-rose-400" />
+                      <span>
+                        <strong>⚠️ 币安安全使用指南：</strong>
+                        在币安后台生成 API Key 时，<strong>请千万只勾选【读取属性/只读】</strong>，千万不要勾选【允许交易】或【允许提币】。仅只读权限即可安全拉取成成交日记流水！
+                      </span>
+                    </div>
+
+                    <button 
+                      onClick={fetchBinanceTrades}
+                      disabled={isBinanceSyncing}
+                      className="w-full py-3.5 bg-purple-600 hover:bg-purple-500 disabled:bg-purple-800/40 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-all active:scale-95 shadow-md cursor-pointer"
+                    >
+                      <RefreshCw size={14} className={isBinanceSyncing ? "animate-spin" : ""} />
+                      {isBinanceSyncing ? "正在安全通讯通讯并拉取中..." : "一键安全拉取币安成交流水"}
+                    </button>
+                  </div>
+                </div>
+
+                {/* 错误或成功提示 */}
+                {binanceError && (
+                  <div className="mt-4 p-4 bg-rose-950/15 border border-rose-900/40 rounded-2xl text-xs text-rose-400 flex items-center gap-2 font-medium">
+                    <AlertTriangle size={14} className="shrink-0" />
+                    <span>{binanceError}</span>
+                  </div>
+                )}
+                {binanceSuccessMsg && (
+                  <div className="mt-4 p-4 bg-emerald-950/15 border border-emerald-900/40 rounded-2xl text-xs text-emerald-400 flex items-center gap-2 font-medium">
+                    <CheckCircle size={14} className="shrink-0" />
+                    <span>{binanceSuccessMsg}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* 成交流水导入及日记撰写区 */}
+              <div className="space-y-4">
+                <div className="flex items-center justify-between px-2">
+                  <h3 className="text-xs font-black text-gray-500 uppercase tracking-[0.2em] flex items-center gap-2">
+                    <List size={12} /> 同步到的币安成交明细
+                  </h3>
+                  {binanceTrades.length > 0 && (
+                    <span className="text-[10px] text-gray-400 font-mono font-bold">
+                      当前共展示 {binanceTrades.length} 笔订单 fills
+                    </span>
+                  )}
+                </div>
+
+                {binanceTrades.length === 0 ? (
+                  <div className="text-center py-20 bg-crypto-card/10 rounded-3xl border-2 border-dashed border-gray-800 text-gray-600 text-sm flex flex-col items-center justify-center gap-3">
+                    <NotebookPen size={32} className="opacity-20 text-purple-400" />
+                    <div className="space-y-1">
+                      <p className="font-bold text-gray-500">暂无待导入的流水记录</p>
+                      <p className="text-[11px] text-gray-600">在上方配置并配对 API 账户密钥后，点击“一键拉取”即可读取</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 gap-4">
+                    {binanceTrades.map((bTrade, idx) => {
+                      const tradeId = String(bTrade.id);
+                      const isImported = trades.some(t => t.id === `binance-${tradeId}`);
+                      
+                      // Identify specs
+                      const isSpot = binanceType === 'SPOT';
+                      const isBuyer = isSpot ? bTrade.isBuyer : (bTrade.side === 'BUY');
+                      const sideLabel = isBuyer ? '买入建仓 (BUY)' : '卖出平仓 (SELL)';
+                      
+                      const priceVal = parseFloat(bTrade.price) || 0;
+                      const qtyVal = parseFloat(bTrade.qty) || 0;
+                      const totalNominal = isSpot ? (parseFloat(bTrade.quoteQty) || (priceVal * qtyVal)) : (priceVal * qtyVal);
+                      
+                      const formattedTime = new Date(bTrade.time).toLocaleString();
+                      const statusVal = binanceTradeStatus[tradeId] || 'CLOSED';
+
+                      return (
+                        <div key={bTrade.id || idx} className={`p-5 rounded-2xl border transition-all ${isImported ? 'bg-gray-900/30 border-gray-800 opacity-70' : 'bg-crypto-card border-gray-800 hover:border-purple-900/30 shadow-lg'}`}>
+                          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-gray-800/40 pb-3 mb-4">
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2.5">
+                                <span className="font-black text-white text-base tracking-tight">{bTrade.symbol}</span>
+                                <span className={`text-[9px] px-2 py-0.5 rounded font-black uppercase ${isBuyer ? 'bg-emerald-950/65 text-emerald-400 border border-emerald-900/20' : 'bg-rose-950/65 text-rose-400 border border-rose-900/20'}`}>
+                                  {sideLabel}
+                                </span>
+                                <span className="text-[9px] text-gray-500 font-semibold">{binanceType}</span>
+                              </div>
+                              <p className="text-[10px] text-gray-500 font-mono font-medium">
+                                交易时间: {formattedTime} | 币安流水 ID: {bTrade.id}
+                              </p>
+                            </div>
+
+                            <div className="flex items-center gap-3">
+                              {/* Ledger Mode select */}
+                              <div className="flex bg-gray-950 rounded-lg p-0.5 border border-gray-800 select-none">
+                                <button
+                                  type="button"
+                                  disabled={isImported}
+                                  onClick={() => setBinanceTradeStatus(prev => ({ ...prev, [tradeId]: 'CLOSED' }))}
+                                  className={`px-2 py-1 text-[9px] font-bold rounded transiton-all ${statusVal === 'CLOSED' ? 'bg-gray-800 text-white shadow-sm' : 'text-gray-500 hover:text-gray-400'}`}
+                                >
+                                  已结清平仓
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={isImported}
+                                  onClick={() => setBinanceTradeStatus(prev => ({ ...prev, [tradeId]: 'HOLDING' }))}
+                                  className={`px-2 py-1 text-[9px] font-bold rounded transiton-all ${statusVal === 'HOLDING' ? 'bg-gray-800 text-white shadow-sm' : 'text-gray-500 hover:text-gray-400'}`}
+                                >
+                                  设为持仓中
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Data info grid */}
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs font-mono mb-4">
+                            <div className="p-2.5 bg-gray-900/40 rounded-xl border border-gray-800/30">
+                              <span className="text-[9px] text-gray-500 block uppercase font-bold mb-0.5">成交价格</span>
+                              <span className="text-white font-bold">${priceVal.toLocaleString()}</span>
+                            </div>
+                            <div className="p-2.5 bg-gray-900/40 rounded-xl border border-gray-800/30">
+                              <span className="text-[9px] text-gray-500 block uppercase font-bold mb-0.5">成交数量</span>
+                              <span className="text-white font-bold">{qtyVal} <span className="text-[9px] text-gray-600 font-sans">{bTrade.symbol.replace("USDT", "")}</span></span>
+                            </div>
+                            <div className="p-2.5 bg-gray-900/40 rounded-xl border border-gray-800/30">
+                              <span className="text-[9px] text-gray-500 block uppercase font-bold mb-0.5">成交额 (Nominal)</span>
+                              <span className="text-white font-bold">${totalNominal.toFixed(2)} USDT</span>
+                            </div>
+                            <div className="p-2.5 bg-gray-900/40 rounded-xl border border-gray-800/30">
+                              <span className="text-[9px] text-gray-600 block uppercase font-bold mb-0.5">实现盈亏 Realized PnL</span>
+                              {!isSpot && parseFloat(bTrade.realizedPnl || '0') !== 0 ? (
+                                <span className={`font-bold ${parseFloat(bTrade.realizedPnl) >= 0 ? 'text-crypto-up' : 'text-crypto-down'}`}>
+                                  {parseFloat(bTrade.realizedPnl) >= 0 ? '+' : ''}{parseFloat(bTrade.realizedPnl).toFixed(2)} USDT
+                                </span>
+                              ) : (
+                                <span className="text-gray-500 font-sans">-- (现货或一阶流动仓)</span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Note taking input and Save CTA */}
+                          <div className="flex flex-col md:flex-row items-stretch md:items-end gap-3 pt-3 border-t border-gray-800/20">
+                            <div className="flex-1">
+                              <label className="text-[10px] text-gray-500 font-bold block mb-1 uppercase">撰写本成交复盘日记（可添加 #失控 #纪律 标签自动统计）</label>
+                              <input 
+                                type="text"
+                                disabled={isImported}
+                                placeholder={isImported ? "该笔成交已归档导入" : "写下这笔交易背后的博弈故事与心得，点击右侧导入系统..."}
+                                value={binanceTradeNotes[tradeId] || ''}
+                                onChange={(e) => setBinanceTradeNotes(prev => ({ ...prev, [tradeId]: e.target.value }))}
+                                className="w-full bg-gray-900/40 border border-gray-800 text-white rounded-xl px-4 py-2.5 text-xs focus:outline-none focus:border-purple-500/85"
+                              />
+                            </div>
+                            <button 
+                              type="button"
+                              onClick={() => importBinanceTrade(bTrade)}
+                              disabled={isImported}
+                              className={`px-5 py-2.5 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all w-full md:w-auto cursor-pointer ${isImported ? 'bg-gray-800 text-gray-500 cursor-not-allowed' : 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white active:scale-95 shadow-md'}`}
+                            >
+                              {isImported ? (
+                                <>
+                                  <Check size={14} /> 已录入复盘笔记
+                                </>
+                              ) : (
+                                <>
+                                  <NotebookPen size={14} /> 确认并录入笔记
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </section>

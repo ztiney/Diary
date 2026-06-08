@@ -2,6 +2,7 @@ import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
+import crypto from "crypto";
 
 const app = express();
 const PORT = 3000;
@@ -127,6 +128,59 @@ ${note ? `- 用户备注/交易心得: "${note}"` : ''}
   } catch (error: any) {
     console.error("Gemini API Error:", error);
     res.status(500).json({ error: "Failed to get advice from AI Advisor: " + (error.message || error) });
+  }
+});
+
+// Binance Signed API Proxy Endpoint
+app.post("/api/binance/trades", async (req, res) => {
+  const { apiKey, secretKey, type, symbol } = req.body;
+
+  if (!apiKey || !secretKey) {
+    res.status(400).json({ error: "Binance API Key and Secret Key are required." });
+    return;
+  }
+
+  const activeSymbol = (symbol || "BTCUSDT").toUpperCase().trim();
+  const timestamp = Date.now();
+  const recvWindow = 5000;
+
+  // Construct query string for signed Binance endpoints
+  const queryString = `symbol=${activeSymbol}&timestamp=${timestamp}&recvWindow=${recvWindow}`;
+
+  try {
+    const signature = crypto
+      .createHmac("sha256", secretKey.trim())
+      .update(queryString)
+      .digest("hex");
+
+    const targetUrl = type === "FUTURES"
+      ? `https://fapi.binance.com/fapi/v1/userTrades?${queryString}&signature=${signature}`
+      : `https://api.binance.com/api/v3/myTrades?${queryString}&signature=${signature}`;
+
+    const response = await fetch(targetUrl, {
+      method: "GET",
+      headers: {
+        "X-MBX-APIKEY": apiKey.trim(),
+        "Accept": "application/json"
+      }
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      let errJson;
+      try {
+        errJson = JSON.parse(errText);
+      } catch (e) {}
+      const errMsg = errJson?.msg || errText || `HTTP response code ${response.status}`;
+      res.status(response.status).json({ error: `Binance: ${errMsg}` });
+      return;
+    }
+
+    const data = await response.json();
+    res.json(data);
+  } catch (error: any) {
+    console.error("Binance Proxy Server Error:", error);
+    res.status(500).json({ error: `Failed to fetch from Binance: ${error.message}` });
   }
 });
 
