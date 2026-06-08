@@ -6,21 +6,67 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>CryptoJournal - 交易复盘日记</title>
     <script>
-      // Defensive initialization for environments/tools probing WeChat or Mini Program properties on window.wx
+      // Defensive initialization for environments/tools probing WeChat or other Mini Program properties on window
       (function() {
         try {
           if (typeof window !== 'undefined') {
-            if (!window.wx) {
-              window.wx = {
-                miniProgram: {
-                  getEnv: function(cb) { if (cb) cb({ miniprogram: false }); }
+            var createResilientMock = function(customTarget) {
+              var target = customTarget || function() {};
+              return new Proxy(target, {
+                get: function(t, prop, receiver) {
+                  if (prop in t) {
+                    try {
+                      return t[prop];
+                    } catch (e) {}
+                  }
+                  if (prop === 'miniProgram') {
+                    return createResilientMock();
+                  }
+                  if (prop === 'getEnv') {
+                    return function(cb) { if (cb) cb({ miniprogram: false }); };
+                  }
+                  if (prop === 'toString' || prop === 'valueOf') {
+                    return function() { return ''; };
+                  }
+                  if (prop === typeof Symbol && Symbol.toPrimitive) {
+                    return function(hint) {
+                      if (hint === 'string') return '';
+                      if (hint === 'number') return 0;
+                      return false;
+                    };
+                  }
+                  return createResilientMock();
+                },
+                apply: function(t, thisArg, argumentsList) {
+                  return createResilientMock();
+                },
+                construct: function(t, argumentsList, newTarget) {
+                  return createResilientMock();
                 }
-              };
-            } else if (!window.wx.miniProgram) {
-              window.wx.miniProgram = {
-                getEnv: function(cb) { if (cb) cb({ miniprogram: false }); }
-              };
-            }
+              });
+            };
+
+            var keys = ['wx', 'my', 'qq', 'tt', 'swan', 'ap', 'ks', 'dd', 'jd', 'uni', 'taro', 'mp'];
+            keys.forEach(function(key) {
+              try {
+                var customTarget = window[key] && typeof window[key] === 'object' ? window[key] : {};
+                var mockInstance = createResilientMock(customTarget);
+                
+                Object.defineProperty(window, key, {
+                  get: function() {
+                    return mockInstance;
+                  },
+                  set: function(val) {
+                    if (val && typeof val === 'object') {
+                      customTarget = val;
+                      mockInstance = createResilientMock(customTarget);
+                    }
+                  },
+                  configurable: true,
+                  enumerable: true
+                });
+              } catch (e) {}
+            });
           }
         } catch (e) {}
       })();
